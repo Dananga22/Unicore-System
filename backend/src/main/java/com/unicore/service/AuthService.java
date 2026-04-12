@@ -8,6 +8,7 @@ import com.unicore.exception.BadRequestException;
 import com.unicore.exception.ConflictException;
 import com.unicore.exception.ForbiddenException;
 import com.unicore.exception.UnauthorizedException;
+
 import com.unicore.model.User;
 import com.unicore.repository.UserRepository;
 import com.unicore.security.JwtTokenProvider;
@@ -25,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class AuthService {
 
     private final UserRepository userRepository;
+
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider tokenProvider;
 
@@ -47,6 +49,23 @@ public class AuthService {
                 .build();
 
         User savedUser = userRepository.save(user);
+        
+        /* 
+        // Notify Admins
+        try {
+            notificationService.notifyAdmins(
+                Notification.NotificationType.NEW_TICKET, // Mapped to NEW_TICKET for now
+                Notification.ReferenceType.USER,
+                "New User Registered",
+                "A new user " + savedUser.getName() + " has joined the platform.",
+                savedUser.getId()
+            );
+        } catch (Exception e) {
+            // Log error
+        }
+        */
+
+
         return mapUser(savedUser);
     }
 

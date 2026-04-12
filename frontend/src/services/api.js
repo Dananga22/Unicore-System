@@ -26,9 +26,18 @@ const parseResponse = async (response) => {
         : await response.text();
 
     if (!response.ok) {
-        const message = typeof payload === 'string'
+        let message = typeof payload === 'string'
             ? payload
             : payload.message || payload.error || 'Request failed';
+            
+        console.error('API Error Response:', payload);
+
+        // Truncate message if it's very long (likely an HTML error page)
+
+        if (message.length > 300) {
+            message = message.substring(0, 300) + '... (Detailed error available in logs)';
+        }
+
         const error = new Error(message);
         error.status = response.status;
         error.fieldErrors = payload.fieldErrors || null;
@@ -134,20 +143,30 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(bookingData),
     }),
-    getUserBookings: () => fetchWithAuth('/bookings'),
-    getAllBookings: () => fetchWithAuth('/bookings?all=true'),
+    getUserBookings: () => fetchWithAuth('/bookings/my'),
+    getAllBookings: () => fetchWithAuth('/bookings'),
+    getBookingById: (id) => fetchWithAuth(`/bookings/${id}`),
     approveBooking: (bookingId) => fetchWithAuth(`/bookings/${bookingId}/approve`, {
-        method: 'PUT',
+        method: 'PATCH',
     }),
     rejectBooking: (bookingId, reason) => fetchWithAuth(`/bookings/${bookingId}/reject`, {
-        method: 'PUT',
+        method: 'PATCH',
         body: JSON.stringify({ reason }),
     }),
     cancelBooking: (bookingId) => fetchWithAuth(`/bookings/${bookingId}/cancel`, {
-        method: 'PUT',
+        method: 'PATCH',
+    }),
+
+    getSlots: (date, resourceId) => fetchWithAuth(`/slots?date=${date}&resourceId=${resourceId}`),
+    bookSlot: (bookingData) => fetchWithAuth('/slots/book', {
+        method: 'POST',
+        body: JSON.stringify(bookingData),
     }),
 
     getTickets: (adminMode = false) => fetchWithAuth(`/tickets${adminMode ? '?adminMode=true' : ''}`),
+    getAdminDashboardSummary: () => fetchWithAuth('/admin/dashboard/summary'),
+    getBookingAnalytics: () => fetchWithAuth('/bookings/analytics/summary'),
+    getTicketAnalytics: () => fetchWithAuth('/tickets/analytics/summary'),
     getTicketById: (id) => fetchWithAuth(`/tickets/${id}`),
     createTicket: (ticketData) => fetchWithAuth('/tickets', {
         method: 'POST',
@@ -156,6 +175,9 @@ export const api = {
     updateTicketStatus: (id, statusData) => fetchWithAuth(`/tickets/${id}/status`, {
         method: 'PATCH',
         body: JSON.stringify(statusData),
+    }),
+    assignTicket: (id, assignedToId) => fetchWithAuth(`/tickets/${id}/assign?assignedToId=${assignedToId}`, {
+        method: 'PATCH',
     }),
     addTicketComment: (id, commentData) => fetchWithAuth(`/tickets/${id}/comments`, {
         method: 'POST',
@@ -172,6 +194,7 @@ export const api = {
     },
 
     getUserNotifications: () => fetchWithAuth('/notifications'),
+    getNotificationUnreadCount: () => fetchWithAuth('/notifications/unread-count'),
     markNotificationAsRead: (id) => fetchWithAuth(`/notifications/${id}/read`, {
         method: 'PUT',
     }),
