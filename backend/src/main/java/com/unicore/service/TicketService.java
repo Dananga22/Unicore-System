@@ -29,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.stream.Collectors;
 
 @Service
@@ -90,10 +91,11 @@ public class TicketService {
 
         // Notify Admins
         try {
+            boolean urgentTicket = savedTicket.getPriority() == Ticket.Priority.HIGH;
             notificationService.notifyAdmins(
                     com.unicore.model.Notification.NotificationType.NEW_TICKET,
                     com.unicore.model.Notification.ReferenceType.TICKET,
-                    savedTicket.getPriority().equals("HIGH") ? "URGENT Ticket Reported" : "New Ticket Reported",
+                    urgentTicket ? "URGENT Ticket Reported" : "New Ticket Reported",
                     "A new " + savedTicket.getPriority() + " priority ticket #" + savedTicket.getId() + " was reported by " + reportedBy.getName() + ".",
                     savedTicket.getId()
             );
@@ -101,6 +103,64 @@ public class TicketService {
             log.error("Failed to notify admins of ticket creation for ticket ID: {}", savedTicket.getId(), e);
         }
 
+
+        return mapToDTO(savedTicket);
+    }
+
+    @Transactional
+    public TicketResponseDTO updateTicket(Long id, TicketRequestDTO request, Long userId) {
+        Ticket ticket = ticketRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("Ticket not found"));
+
+        if (!ticket.getReportedBy().getId().equals(userId)) {
+            throw new ForbiddenException("You can only edit your own tickets");
+        }
+        if (ticket.getStatus() != Ticket.TicketStatus.OPEN) {
+            throw new BadRequestException("Only tickets in OPEN status can be edited");
+        }
+
+        Resource resource = null;
+        if (request.getResourceId() != null) {
+            resource = resourceRepository.findById(request.getResourceId())
+                    .orElseThrow(() -> new NotFoundException("Resource not found"));
+        }
+
+        ticket.setResource(resource);
+        ticket.setLocation(request.getLocation() != null ? request.getLocation() : (resource != null ? resource.getLocation() : ticket.getLocation()));
+        ticket.setCategory(request.getCategory());
+        ticket.setDescription(request.getDescription());
+        ticket.setPriority(request.getPriority());
+        ticket.setContactDetails(request.getContactDetails());
+
+        Ticket savedTicket = ticketRepository.save(ticket);
+        
+        User actor = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+        logHistory(savedTicket, actor, "Ticket Updated", null, null);
+
+        return mapToDTO(savedTicket);
+    }
+
+    @Transactional
+    public TicketResponseDTO cancelTicket(Long id, Long userId) {
+        Ticket ticket = ticketRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("Ticket not found"));
+
+        if (!ticket.getReportedBy().getId().equals(userId)) {
+            throw new ForbiddenException("You can only cancel your own tickets");
+        }
+        if (ticket.getStatus() != Ticket.TicketStatus.OPEN) {
+            throw new BadRequestException("Only tickets in OPEN status can be cancelled");
+        }
+
+        Ticket.TicketStatus oldStatus = ticket.getStatus();
+        ticket.setStatus(Ticket.TicketStatus.CANCELLED);
+        
+        Ticket savedTicket = ticketRepository.save(ticket);
+        
+        User actor = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+        logHistory(savedTicket, actor, "Ticket Cancelled", oldStatus.name(), Ticket.TicketStatus.CANCELLED.name());
 
         return mapToDTO(savedTicket);
     }
@@ -132,6 +192,14 @@ public class TicketService {
         java.util.Map<String, Long> byCategory = tickets.stream()
                 .filter(t -> t.getCategory() != null)
                 .collect(Collectors.groupingBy(Ticket::getCategory, Collectors.counting()));
+
+        java.util.Map<String, Long> byStatus = ticketRepository.findTicketStatusDistribution().stream()
+                .collect(Collectors.toMap(
+                        row -> String.valueOf(row[0]),
+                        row -> ((Number) row[1]).longValue(),
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ));
                 
         return com.unicore.dto.TicketAnalyticsDTO.builder()
                 .totalTickets(total)
@@ -140,6 +208,7 @@ public class TicketService {
                 .resolvedTickets(resolved)
                 .closedTickets(closed)
                 .ticketsByCategory(byCategory)
+                .ticketsByStatus(byStatus)
                 .build();
     }
 
@@ -277,36 +346,59 @@ public class TicketService {
         }
 
 
-        return CommentResponseDTO.builder()
-                .id(comment.getId())
-                .ticketId(ticket.getId())
-                .userId(user.getId())
-                .userName(user.getName())
-                .content(comment.getContent())
-                .createdAt(comment.getCreatedAt())
-                .build();
+        return mapCommentToDTO(comment);
+    }
+
+    @Transactional
+    public CommentResponseDTO updateComment(Long commentId, CommentRequestDTO request, Long userId, boolean admin) {
+        Comment comment = commentRepository.findById(commentId)
+                .orElseThrow(() -> new NotFoundException("Comment not found"));
+
+        assertCommentAccess(comment, userId, admin);
+
+        String content = request.getContent() == null ? "" : request.getContent().trim();
+        if (content.isBlank()) {
+            throw new BadRequestException("Comment content is required");
+        }
+
+        comment.setContent(content);
+        return mapCommentToDTO(commentRepository.save(comment));
+    }
+
+    @Transactional
+    public void deleteComment(Long commentId, Long userId, boolean admin) {
+        Comment comment = commentRepository.findById(commentId)
+                .orElseThrow(() -> new NotFoundException("Comment not found"));
+
+        assertCommentAccess(comment, userId, admin);
+        commentRepository.delete(comment);
     }
 
     @Transactional(readOnly = true)
     public List<CommentResponseDTO> getCommentsForTicket(Long ticketId, Long userId, boolean privileged) {
         getAccessibleTicket(ticketId, userId, privileged);
         return commentRepository.findByTicketIdOrderByCreatedAtAsc(ticketId).stream()
-                .map(c -> CommentResponseDTO.builder()
-                        .id(c.getId())
-                        .ticketId(c.getTicket().getId())
-                        .userId(c.getUser().getId())
-                        .userName(c.getUser().getName())
-                        .content(c.getContent())
-                        .createdAt(c.getCreatedAt())
-                        .build())
+                .map(this::mapCommentToDTO)
                 .collect(Collectors.toList());
     }
 
     @Transactional
     public TicketResponseDTO uploadAttachment(Long ticketId, MultipartFile file, Long userId, boolean privileged) {
         Ticket ticket = getAccessibleTicket(ticketId, userId, privileged);
+        
         if (ticketImageRepository.countByTicketId(ticketId) >= 3) {
             throw new BadRequestException("A maximum of 3 attachments is allowed per ticket");
+        }
+
+        // Validate File Type
+        String contentType = file.getContentType();
+        if (contentType == null || !List.of("image/png", "image/jpeg", "image/webp").contains(contentType.toLowerCase())) {
+            throw new BadRequestException("Only image files (PNG, JPG, JPEG, WEBP) are allowed");
+        }
+
+        // Validate File Size (5MB)
+        if (file.getSize() > 5 * 1024 * 1024) {
+            throw new BadRequestException("File size must be 5MB or smaller");
         }
 
         String imageUrl = fileStorageService.storeFile(file);
@@ -331,6 +423,25 @@ public class TicketService {
         return ticket;
     }
 
+    private void assertCommentAccess(Comment comment, Long userId, boolean admin) {
+        boolean owner = comment.getUser() != null && comment.getUser().getId().equals(userId);
+        if (!owner && !admin) {
+            throw new ForbiddenException("Only the comment owner or an admin can modify this comment");
+        }
+    }
+
+    private CommentResponseDTO mapCommentToDTO(Comment comment) {
+        return CommentResponseDTO.builder()
+                .id(comment.getId())
+                .ticketId(comment.getTicket().getId())
+                .userId(comment.getUser().getId())
+                .userName(comment.getUser().getName())
+                .content(comment.getContent())
+                .createdAt(comment.getCreatedAt())
+                .updatedAt(comment.getUpdatedAt())
+                .build();
+    }
+
     private void validateStatusUpdate(Ticket ticket, TicketUpdateStatusDTO request) {
         Ticket.TicketStatus currentStatus = ticket.getStatus();
         Ticket.TicketStatus nextStatus = request.getStatus();
@@ -348,11 +459,10 @@ public class TicketService {
 
     private boolean isValidTransition(Ticket.TicketStatus currentStatus, Ticket.TicketStatus nextStatus) {
         return switch (currentStatus) {
-            case OPEN -> nextStatus == Ticket.TicketStatus.IN_PROGRESS || nextStatus == Ticket.TicketStatus.REJECTED;
+            case OPEN -> nextStatus == Ticket.TicketStatus.IN_PROGRESS || nextStatus == Ticket.TicketStatus.REJECTED || nextStatus == Ticket.TicketStatus.CANCELLED;
             case IN_PROGRESS -> nextStatus == Ticket.TicketStatus.RESOLVED || nextStatus == Ticket.TicketStatus.REJECTED;
             case RESOLVED -> nextStatus == Ticket.TicketStatus.CLOSED;
-            case CLOSED -> false;
-            case REJECTED -> false;
+            case CLOSED, REJECTED, CANCELLED -> false;
         };
     }
 
