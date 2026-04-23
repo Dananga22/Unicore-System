@@ -13,6 +13,7 @@ import {
   Info
 } from 'lucide-react';
 import { api } from '../services/api';
+import Breadcrumbs from './Breadcrumbs';
 
 export default function AdminBookingApprovals() {
   const [bookings, setBookings] = useState([]);
@@ -108,6 +109,12 @@ export default function AdminBookingApprovals() {
 
   return (
     <div className="animate-fade">
+      <Breadcrumbs 
+        items={[
+          { label: 'Dashboard', path: '/dashboard' },
+          { label: 'Booking Approvals' }
+        ]} 
+      />
       <div className="flex justify-between items-center mb-6">
         <div>
           <h2 style={{ fontSize: '1.75rem', fontWeight: 800 }}>Booking Approvals</h2>
@@ -196,7 +203,9 @@ export default function AdminBookingApprovals() {
                         <div className="text-primary font-bold text-xs">{booking.startTime} - {booking.endTime}</div>
                       </td>
                       <td>
-                        <span className={`badge badge-${booking.status.toLowerCase()}`}>{booking.status}</span>
+                        <span className={`badge badge-${booking.status.toLowerCase()}`}>
+                          {booking.status === 'CANCELLATION_REQUESTED' ? 'Cancel Requested' : booking.status}
+                        </span>
                       </td>
                       <td style={{ textAlign: 'right' }}>
                         {booking.status === 'PENDING' ? (
@@ -294,7 +303,11 @@ export default function AdminBookingApprovals() {
                 </div>
                 <div className="form-group">
                   <label className="label">Status</label>
-                  <div><span className={`badge badge-${selectedBooking.status.toLowerCase()}`}>{selectedBooking.status}</span></div>
+                  <div>
+                    <span className={`badge badge-${selectedBooking.status.toLowerCase()}`}>
+                      {selectedBooking.status === 'CANCELLATION_REQUESTED' ? 'Cancel Requested' : selectedBooking.status}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
