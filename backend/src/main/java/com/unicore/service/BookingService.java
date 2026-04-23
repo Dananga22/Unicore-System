@@ -21,7 +21,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -29,6 +31,8 @@ import java.util.stream.Collectors;
 @Slf4j
 public class BookingService {
 
+    private static final Set<Booking.BookingStatus> ACTIVE_BOOKING_STATUSES =
+            Set.of(Booking.BookingStatus.PENDING, Booking.BookingStatus.APPROVED, Booking.BookingStatus.CANCELLATION_REQUESTED);
 
     private final BookingRepository bookingRepository;
     private final ResourceRepository resourceRepository;
@@ -56,12 +60,7 @@ public class BookingService {
             throw new BadRequestException("Expected attendees exceed the resource capacity");
         }
 
-        List<Booking> conflicts = bookingRepository.findConflictingBookings(
-                resource.getId(), request.getDate(), request.getStartTime(), request.getEndTime());
-
-        if (!conflicts.isEmpty()) {
-            throw new ConflictException("Resource is already booked during this time. Please select another time.");
-        }
+        ensureNoBookingConflict(resource.getId(), request.getDate(), request.getStartTime(), request.getEndTime(), null);
 
         Booking booking = Booking.builder()
                 .resource(resource)
@@ -119,31 +118,45 @@ public class BookingService {
 
     @Transactional(readOnly = true)
     public BookingAnalyticsDTO getAnalyticsSummary() {
-        List<Booking> all = bookingRepository.findAll();
-        
-        long total = all.size();
-        long pending = all.stream().filter(b -> b.getStatus() == Booking.BookingStatus.PENDING).count();
-        long approved = all.stream().filter(b -> b.getStatus() == Booking.BookingStatus.APPROVED).count();
-        long rejected = all.stream().filter(b -> b.getStatus() == Booking.BookingStatus.REJECTED).count();
-        long cancelled = all.stream().filter(b -> b.getStatus() == Booking.BookingStatus.CANCELLED).count();
+        long total = bookingRepository.count();
+        long pending = bookingRepository.countByStatus(Booking.BookingStatus.PENDING);
+        long approved = bookingRepository.countByStatus(Booking.BookingStatus.APPROVED);
+        long rejected = bookingRepository.countByStatus(Booking.BookingStatus.REJECTED);
+        long cancelled = bookingRepository.countByStatus(Booking.BookingStatus.CANCELLED);
 
-        Map<String, Long> byStatus = all.stream()
-                .collect(Collectors.groupingBy(b -> b.getStatus().name(), Collectors.counting()));
+        long cancellationRequests = bookingRepository.countByStatus(Booking.BookingStatus.CANCELLATION_REQUESTED);
 
-        Map<String, Long> popularity = all.stream()
-                .collect(Collectors.groupingBy(b -> b.getResource().getName(), Collectors.counting()))
-                .entrySet().stream()
-                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+        Map<String, Long> byStatus = new LinkedHashMap<>();
+        byStatus.put(Booking.BookingStatus.PENDING.name(), pending);
+        byStatus.put(Booking.BookingStatus.APPROVED.name(), approved);
+        byStatus.put(Booking.BookingStatus.REJECTED.name(), rejected);
+        byStatus.put(Booking.BookingStatus.CANCELLED.name(), cancelled);
+        byStatus.put(Booking.BookingStatus.CANCELLATION_REQUESTED.name(), cancellationRequests);
+
+        Map<String, Long> popularity = bookingRepository.findResourceUsageCounts().stream()
                 .limit(5)
-                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+                .collect(Collectors.toMap(
+                        row -> String.valueOf(row[0]),
+                        row -> ((Number) row[1]).longValue(),
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ));
 
-        Map<String, Long> trends = all.stream()
+        Map<String, Long> trends = bookingRepository.findAll().stream()
                 .filter(b -> b.getDate() != null)
                 .collect(Collectors.groupingBy(b -> b.getDate().toString(), Collectors.counting()))
                 .entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
-                .limit(14) // Last 14 days or so
+                .limit(14)
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+
+        Map<String, Long> peakHours = bookingRepository.findPeakBookingHourCounts().stream()
+                .collect(Collectors.toMap(
+                        row -> String.format("%02d:00", ((Number) row[0]).intValue()),
+                        row -> ((Number) row[1]).longValue(),
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ));
 
         return BookingAnalyticsDTO.builder()
                 .totalBookings(total)
@@ -151,9 +164,11 @@ public class BookingService {
                 .approvedBookings(approved)
                 .rejectedBookings(rejected)
                 .cancelledBookings(cancelled)
+                .cancellationRequests(cancellationRequests)
                 .bookingsByStatus(byStatus)
                 .resourcePopularity(popularity)
                 .bookingsByDate(trends)
+                .peakBookingHours(peakHours)
                 .build();
     }
 
@@ -177,13 +192,13 @@ public class BookingService {
             throw new BadRequestException("Only pending bookings can be approved");
         }
 
-        // Final conflict check before approval
-        List<Booking> conflicts = bookingRepository.findConflictingBookings(
-                booking.getResource().getId(), booking.getDate(), booking.getStartTime(), booking.getEndTime());
-
-        if (!conflicts.isEmpty()) {
-            throw new ConflictException("Cannot approve this booking. The resource is already booked during this time by an approved request.");
-        }
+        ensureNoBookingConflict(
+                booking.getResource().getId(),
+                booking.getDate(),
+                booking.getStartTime(),
+                booking.getEndTime(),
+                booking.getId()
+        );
 
         booking.setStatus(Booking.BookingStatus.APPROVED);
         booking.setReviewedBy(admin);
@@ -242,11 +257,14 @@ public class BookingService {
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new NotFoundException("Booking not found"));
 
-        if (!booking.getUser().getId().equals(userId)) {
+        User actingUser = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+
+        if (!booking.getUser().getId().equals(userId) && actingUser.getRole() != User.Role.ADMIN) {
             throw new ForbiddenException("Not authorized to cancel this booking");
         }
-        if (booking.getStatus() == Booking.BookingStatus.REJECTED || booking.getStatus() == Booking.BookingStatus.CANCELLED) {
-            throw new BadRequestException("This booking can no longer be cancelled");
+        if (booking.getStatus() != Booking.BookingStatus.PENDING && booking.getStatus() != Booking.BookingStatus.CANCELLATION_REQUESTED) {
+            throw new BadRequestException("Only pending bookings or those with a cancellation request can be cancelled.");
         }
 
         booking.setStatus(Booking.BookingStatus.CANCELLED);
@@ -261,7 +279,7 @@ public class BookingService {
             );
 
             // Notify Admins of cancellation if it was previously approved
-            if (booking.getStatus() == Booking.BookingStatus.APPROVED) {
+            if (booking.getReviewedBy() != null) {
                 notificationService.notifyAdmins(
                         com.unicore.model.Notification.NotificationType.BOOKING_CANCELLED,
                         com.unicore.model.Notification.ReferenceType.BOOKING,
@@ -278,6 +296,81 @@ public class BookingService {
         return mapToDTO(bookingRepository.save(booking));
     }
 
+    @Transactional
+    public BookingResponseDTO updateBooking(Long id, BookingRequestDTO request, Long userId) {
+        Booking booking = bookingRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("Booking not found"));
+
+        if (!booking.getUser().getId().equals(userId)) {
+            throw new ForbiddenException("Not authorized to edit this booking");
+        }
+
+        if (booking.getStatus() != Booking.BookingStatus.PENDING) {
+            throw new BadRequestException("Only pending bookings can be edited. Current status: " + booking.getStatus());
+        }
+
+        validateBookingRequest(request);
+
+        Resource resource = resourceRepository.findById(request.getResourceId())
+                .orElseThrow(() -> new NotFoundException("Resource not found"));
+        
+        if (resource.getStatus() != ResourceStatus.ACTIVE) {
+            throw new BadRequestException("The selected resource is currently unavailable");
+        }
+
+        if (request.getExpectedAttendees() != null && request.getExpectedAttendees() > resource.getCapacity()) {
+            throw new BadRequestException("Expected attendees exceed the resource capacity");
+        }
+
+        // Run conflict check excluding the current booking
+        ensureNoBookingConflict(resource.getId(), request.getDate(), request.getStartTime(), request.getEndTime(), id);
+
+        // Update fields
+        booking.setResource(resource);
+        booking.setDate(request.getDate());
+        booking.setStartTime(request.getStartTime());
+        booking.setEndTime(request.getEndTime());
+        booking.setPurpose(request.getPurpose());
+        booking.setExpectedAttendees(request.getExpectedAttendees());
+
+        // Booking remains PENDING
+        Booking savedBooking = bookingRepository.save(booking);
+
+        // Notify Admins of update
+        try {
+            notificationService.notifyAdmins(
+                    com.unicore.model.Notification.NotificationType.NEW_BOOKING,
+                    com.unicore.model.Notification.ReferenceType.BOOKING,
+                    "Booking Request Updated",
+                    "A pending booking request for " + resource.getName() + " was updated by " + booking.getUser().getName() + ". Please re-review.",
+                    savedBooking.getId()
+            );
+        } catch (Exception e) {
+            log.error("Failed to notify admins of booking update for ID: {}", savedBooking.getId());
+        }
+
+        return mapToDTO(savedBooking);
+    }
+
+    @Transactional(readOnly = true)
+    public BookingAnalyticsDTO getUserAnalyticsSummary(Long userId) {
+        long total = bookingRepository.countByUserId(userId);
+        long pending = bookingRepository.countByUserIdAndStatus(userId, Booking.BookingStatus.PENDING);
+        long approved = bookingRepository.countByUserIdAndStatus(userId, Booking.BookingStatus.APPROVED);
+        long active = bookingRepository.countActiveBookings(
+                userId, 
+                Set.of(Booking.BookingStatus.PENDING, Booking.BookingStatus.APPROVED), 
+                java.time.LocalDate.now()
+        );
+
+        return BookingAnalyticsDTO.builder()
+                .totalBookings(total)
+                .pendingBookings(pending)
+                .approvedBookings(approved)
+                .activeBookings(active)
+                .build();
+    }
+
     private void validateBookingRequest(BookingRequestDTO request) {
         if (request.getResourceId() == null) {
             throw new BadRequestException("Resource ID is required");
@@ -291,10 +384,98 @@ public class BookingService {
         if (!request.getEndTime().isAfter(request.getStartTime())) {
             throw new BadRequestException("End time must be after start time");
         }
+
+        Resource resource = resourceRepository.findById(request.getResourceId())
+                .orElseThrow(() -> new NotFoundException("Resource not found"));
+
+        validateResourceAvailability(resource, request.getDate(), request.getStartTime(), request.getEndTime());
+    }
+
+    private void validateResourceAvailability(Resource resource, java.time.LocalDate date, 
+                                            java.time.LocalTime start, java.time.LocalTime end) {
+        java.time.DayOfWeek day = date.getDayOfWeek();
+        List<com.unicore.model.AvailabilityWindow> windows = resource.getAvailabilityWindows();
+
+        if (windows == null || windows.isEmpty()) {
+            // Default Fallback: Mon-Fri, 08:00 - 17:00
+            boolean isWeekend = (day == java.time.DayOfWeek.SATURDAY || day == java.time.DayOfWeek.SUNDAY);
+            if (isWeekend) {
+                throw new BadRequestException("This resource is only available on weekdays (Mon-Fri)");
+            }
+            java.time.LocalTime defaultStart = java.time.LocalTime.of(8, 0);
+            java.time.LocalTime defaultEnd = java.time.LocalTime.of(17, 0);
+            
+            if (start.isBefore(defaultStart) || end.isAfter(defaultEnd)) {
+                throw new BadRequestException("Requested time is outside the standard operating hours (08:00 - 17:00)");
+            }
+            return;
+        }
+
+        // Check if falls within defined windows for the given day
+        boolean fitsInWindow = windows.stream()
+                .filter(w -> w.getDayOfWeek() == day)
+                .anyMatch(w -> (start.equals(w.getStartTime()) || start.isAfter(w.getStartTime())) 
+                            && (end.equals(w.getEndTime()) || end.isBefore(w.getEndTime())));
+
+        if (!fitsInWindow) {
+            throw new BadRequestException("The requested time does not align with the resource's availability schedule for " + day);
+        }
+    }
+
+    private void ensureNoBookingConflict(Long resourceId, java.time.LocalDate date, java.time.LocalTime startTime,
+                                         java.time.LocalTime endTime, Long excludeBookingId) {
+        boolean conflictExists = bookingRepository.existsConflictingBooking(
+                resourceId,
+                date,
+                startTime,
+                endTime,
+                ACTIVE_BOOKING_STATUSES,
+                excludeBookingId
+        );
+
+        if (conflictExists) {
+            throw new ConflictException(
+                    "Booking conflict detected for this resource. The selected start and end time overlap an existing booking."
+            );
+        }
     }
 
 
-    private BookingResponseDTO mapToDTO(Booking booking) {
+    @Transactional
+    public void requestCancellation(Long bookingId, Long userId) {
+        Booking booking = bookingRepository.findById(bookingId)
+                .orElseThrow(() -> new NotFoundException("Booking not found"));
+
+        if (!booking.getUser().getId().equals(userId)) {
+            throw new ForbiddenException("Not authorized to request cancellation for this booking");
+        }
+
+        if (booking.getStatus() != Booking.BookingStatus.APPROVED) {
+            throw new BadRequestException("Cancellation requests can only be made for approved bookings.");
+        }
+
+        try {
+            // Update status
+            booking.setStatus(Booking.BookingStatus.CANCELLATION_REQUESTED);
+            bookingRepository.save(booking);
+
+            // Notify Admins
+            notificationService.notifyAdmins(
+                    com.unicore.model.Notification.NotificationType.BOOKING_CANCELLATION_REQUEST,
+                    com.unicore.model.Notification.ReferenceType.BOOKING,
+                    "Cancellation Request",
+                    "User " + booking.getUser().getName() + " has requested to cancel their approved booking for " + booking.getResource().getName() + " on " + booking.getDate() + ".",
+                    booking.getId()
+            );
+            
+            log.info("Cancellation request sent for booking ID: {}", booking.getId());
+        } catch (Exception e) {
+            log.error("Failed to send cancellation request notification for booking ID: {}", booking.getId(), e);
+            throw new RuntimeException("Failed to send cancellation request to admin. Please try again.");
+        }
+    }
+
+    public BookingResponseDTO mapToDTO(Booking booking) {
         BookingResponseDTO.BookingResponseDTOBuilder builder = BookingResponseDTO.builder()
                 .id(booking.getId())
                 .date(booking.getDate())
