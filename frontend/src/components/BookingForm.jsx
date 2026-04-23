@@ -1,8 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useParams, useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 
 export default function BookingForm({ userData }) {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const isEditMode = !!id;
+
   if (userData?.role !== 'USER') {
     return <Navigate to="/dashboard" replace />;
   }
@@ -31,8 +35,22 @@ export default function BookingForm({ userData }) {
         const data = await api.getResources();
         const activeResources = data.filter((resource) => resource.status === 'ACTIVE');
         setResources(activeResources);
-        if (activeResources.length > 0) {
+        
+        if (!isEditMode && activeResources.length > 0) {
           setFormData((prev) => ({ ...prev, resourceId: activeResources[0].id }));
+        }
+
+        if (isEditMode) {
+          const booking = await api.getBookingById(id);
+          setFormData({
+            resourceId: booking.resourceId,
+            date: booking.date,
+            purpose: booking.purpose,
+            notes: '',
+            expectedAttendees: booking.expectedAttendees,
+            startTime: booking.startTime,
+            endTime: booking.endTime
+          });
         }
       } catch (err) {
         setStatus({ type: 'error', message: err.message });
@@ -40,7 +58,7 @@ export default function BookingForm({ userData }) {
     };
 
     fetchResources();
-  }, []);
+  }, [id, isEditMode]);
 
   useEffect(() => {
     if (formData.resourceId && formData.date) {
@@ -52,29 +70,25 @@ export default function BookingForm({ userData }) {
     // 1. Reset selection state and clear previous slots/errors immediately
     setSlots([]);
     setSelectedSlots([]);
-    setFormData(prev => ({ ...prev, startTime: '', endTime: '' }));
     setStatus({ type: '', message: '' });
     setValidation('');
 
-    // 2. Sanitize date - prevent malformed years (e.g. from manual typing or prepends)
+    // 2. Sanitize date
     if (!date || date.length > 10 || parseInt(date.substring(0, 4)) > 2100) {
-      return; // Ignore invalid dates silently or show a mini-hint
+      return; 
     }
 
     try {
       setLoadingSlots(true);
       const data = await api.getSlots(date, resourceId);
-      
-      // 3. Ensure data is an array before setting slots
       if (Array.isArray(data)) {
         setSlots(data);
       } else {
         throw new Error('Received invalid slot data format from server.');
       }
     } catch (err) {
-      // 4. Handle HTML error pages or generic 500s gracefully
       const friendlyMessage = err.message?.includes('<!DOCTYPE') 
-        ? 'An unexpected server error occurred while scanning schedules.' 
+        ? 'An unexpected server error occurred.' 
         : err.message;
       setStatus({ type: 'error', message: friendlyMessage });
     } finally {
@@ -90,6 +104,13 @@ export default function BookingForm({ userData }) {
   const handleChange = (event) => {
     const { name, value } = event.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
+    
+    // If user changes resource or date, we MUST clear any previously selected time slots
+    if (name === 'resourceId' || name === 'date') {
+      setFormData(prev => ({ ...prev, startTime: '', endTime: '' }));
+      setSelectedSlots([]);
+    }
+    
     setValidation('');
   };
 
@@ -133,10 +154,21 @@ export default function BookingForm({ userData }) {
           startTime: selectedSlots[0].startTime,
           endTime: selectedSlots[selectedSlots.length - 1].endTime,
       }));
-    } else {
+    } else if (!isEditMode) {
       setFormData(f => ({ ...f, startTime: '', endTime: '' }));
     }
-  }, [selectedSlots]);
+  }, [selectedSlots, isEditMode]);
+
+  // Pre-select slots when they finish loading in edit mode
+  useEffect(() => {
+    if (isEditMode && slots.length > 0 && formData.startTime && formData.endTime && selectedSlots.length === 0) {
+      const startIdx = slots.findIndex(s => s.startTime === formData.startTime);
+      const endIdx = slots.findIndex(s => s.endTime === formData.endTime);
+      if (startIdx !== -1 && endIdx !== -1) {
+        setSelectedSlots(slots.slice(startIdx, endIdx + 1));
+      }
+    }
+  }, [slots, isEditMode, formData.startTime, formData.endTime, selectedSlots.length]);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -159,25 +191,32 @@ export default function BookingForm({ userData }) {
         expectedAttendees: Number(formData.expectedAttendees),
       };
 
-      console.log('Submitting Booking Payload:', bookingData);
-
-      await api.createBooking(bookingData);
-
-
-      setStatus({ type: 'success', message: 'Booking request submitted successfully. Approval status will appear in My Bookings.' });
-      setFormData((prev) => ({
-        ...prev,
-        date: '',
-        purpose: '',
-        expectedAttendees: 1,
-        startTime: '',
-        endTime: '',
-      }));
-      setSelectedSlots([]);
-      setSlots([]);
+      if (isEditMode) {
+        await api.updateBooking(id, bookingData);
+        setStatus({ type: 'success', message: 'Booking updated successfully. Returning to history...' });
+        setLoading(true); // Keep disabled until we leave
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        setTimeout(() => navigate('/history', { replace: true }), 1200);
+      } else {
+        await api.createBooking(bookingData);
+        setStatus({ type: 'success', message: 'Booking request submitted successfully.' });
+        setLoading(false);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        handleReset();
+      }
     } catch (err) {
-      setStatus({ type: 'error', message: err.message });
+      // Mapping technical backend conflicts to friendly UX messages
+      let friendlyMessage = err.message;
+      
+      if (err.message?.toLowerCase().includes('overlap') || err.message?.toLowerCase().includes('conflict')) {
+        friendlyMessage = 'Selected time is no longer available. Please choose another slot.';
+      } else if (err.message?.includes('<!DOCTYPE')) {
+        friendlyMessage = 'An unexpected server error occurred. Please try again later.';
+      }
+
+      setStatus({ type: 'error', message: friendlyMessage });
       setLoading(false);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
@@ -200,8 +239,12 @@ export default function BookingForm({ userData }) {
   return (
     <div className="animate-fade">
       <div className="mb-8 pl-1">
-        <h2 style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--primary)', marginBottom: '0.25rem' }}>Booking Management</h2>
-        <p className="text-muted" style={{ fontSize: '1.05rem' }}>Select a date and interactive visual time slots to create a conflict-free request.</p>
+        <h2 style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--primary)', marginBottom: '0.25rem' }}>
+          {isEditMode ? 'Edit Booking Request' : 'Booking Management'}
+        </h2>
+        <p className="text-muted" style={{ fontSize: '1.05rem' }}>
+          {isEditMode ? `Modify your existing request for #${id}.` : 'Select a date and interactive visual time slots to create a conflict-free request.'}
+        </p>
       </div>
 
       {(status.message || validation) && (
@@ -288,19 +331,19 @@ export default function BookingForm({ userData }) {
                   if (slot.state === 'BOOKED') {
                     stateClass = 'timeline-slot-booked';
                     icon = '🔒';
-                    tooltip = 'Already booked';
+                    tooltip = 'This slot has already been reserved. Please select a different time.';
                   } else if (slot.state === 'UNAVAILABLE') {
                     stateClass = 'timeline-slot-unavailable';
-                    icon = '⚠';
-                    tooltip = 'Under maintenance or unavailable';
+                    icon = '🚫';
+                    tooltip = 'Scheduling gap or maintenance. Choose another time.';
                   } else if (isSelected) {
                     stateClass = 'timeline-slot-selected';
                     icon = '✔';
-                    tooltip = 'Selected for booking';
+                    tooltip = 'Currently selected for your request.';
                   } else {
                     stateClass = 'timeline-slot-available';
                     icon = '🕘';
-                    tooltip = 'Available - Click to select';
+                    tooltip = 'Available for booking. Click to select.';
                   }
 
                   return (
@@ -406,7 +449,7 @@ export default function BookingForm({ userData }) {
                 disabled={loading || selectedSlots.length === 0 || (selectedResource && formData.expectedAttendees > selectedResource.capacity)}
                 style={{ width: '100%', padding: '1rem', fontSize: '1.05rem', borderRadius: '12px', display: 'flex', justifyContent: 'center', boxShadow: 'var(--shadow-md)' }}
               >
-                {loading ? 'Submitting...' : 'Confirm Reservation'}
+                {loading ? 'Processing...' : (isEditMode ? 'Save Changes' : 'Confirm Reservation')}
               </button>
               
               <button 
