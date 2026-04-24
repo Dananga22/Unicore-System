@@ -9,6 +9,7 @@ import com.unicore.repository.ResourceRepository;
 import com.unicore.exception.NotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.DayOfWeek;
 import java.time.LocalDate;
@@ -23,6 +24,7 @@ public class SlotService {
     private final ResourceRepository resourceRepository;
     private final BookingRepository bookingRepository;
 
+    @Transactional(readOnly = true)
     public List<SlotResponseDTO> getSlotsForResource(Long resourceId, LocalDate date) {
         Resource resource = resourceRepository.findById(resourceId)
                 .orElseThrow(() -> new NotFoundException("Resource not found"));
@@ -32,18 +34,33 @@ public class SlotService {
                 .filter(w -> w.getDayOfWeek() == dayOfWeek)
                 .toList();
 
-        List<Booking> bookings = bookingRepository.findAllWithFilters(null, resourceId, date);
-        // We consider only APPROVED as booked to allow multiple pending requests
-        List<Booking> activeBookings = bookings.stream()
-                .filter(b -> b.getStatus() == Booking.BookingStatus.APPROVED)
-                .toList();
-
+        // 🔥 FIX: Fallback logic for new resources without custom schedules
+        if (windows.isEmpty()) {
+            // Apply fallback only for weekdays (Mon-Fri) if no specific windows are set
+            if (dayOfWeek != DayOfWeek.SATURDAY && dayOfWeek != DayOfWeek.SUNDAY) {
+                windows = new ArrayList<>();
+                windows.add(AvailabilityWindow.builder()
+                        .startTime(LocalTime.of(8, 0))
+                        .endTime(LocalTime.of(17, 0))
+                        .dayOfWeek(dayOfWeek)
+                        .build());
+            }
+        }
 
         List<SlotResponseDTO> slots = new ArrayList<>();
 
         if (windows.isEmpty()) {
             return slots;
         }
+
+        // Business Rule: Resource must be ACTIVE to be bookable
+        boolean isResourceActive = resource.getStatus() == Resource.ResourceStatus.ACTIVE;
+
+        List<Booking> bookings = bookingRepository.findAllWithFilters(null, resourceId, date);
+        // We consider only APPROVED as booked to allow multiple pending requests
+        List<Booking> activeBookings = bookings.stream()
+                .filter(b -> b.getStatus() == Booking.BookingStatus.APPROVED)
+                .toList();
 
         // Generate 1-hour slots for each window
         for (AvailabilityWindow window : windows) {
@@ -60,7 +77,9 @@ public class SlotService {
                 // Determine state
                 String state = "AVAILABLE";
 
-                if (date.isEqual(LocalDate.now()) && slotStart.isBefore(LocalTime.now())) {
+                if (!isResourceActive) {
+                    state = "UNAVAILABLE";
+                } else if (date.isEqual(LocalDate.now()) && slotStart.isBefore(LocalTime.now())) {
                     state = "UNAVAILABLE";
                 } else if (date.isBefore(LocalDate.now())) {
                     state = "UNAVAILABLE";

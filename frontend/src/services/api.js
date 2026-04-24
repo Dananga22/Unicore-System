@@ -1,4 +1,8 @@
-const API_BASE_URL = 'http://localhost:8080/api';
+const API_BASE_URL =
+    import.meta.env.VITE_API_BASE_URL?.trim() ||
+    'http://localhost:8080/api';
+
+export const API_ORIGIN = API_BASE_URL.replace(/\/api\/?$/, '');
 
 const getAuthHeaders = (headers = {}, body) => {
     const token = localStorage.getItem('accessToken');
@@ -16,9 +20,7 @@ const getAuthHeaders = (headers = {}, body) => {
 };
 
 const parseResponse = async (response) => {
-    if (response.status === 204) {
-        return null;
-    }
+    if (response.status === 204) return null;
 
     const contentType = response.headers.get('content-type') || '';
     const payload = contentType.includes('application/json')
@@ -29,18 +31,11 @@ const parseResponse = async (response) => {
         let message = typeof payload === 'string'
             ? payload
             : payload.message || payload.error || 'Request failed';
-            
-        console.error('API Error Response:', payload);
 
-        // Truncate message if it's very long (likely an HTML error page)
-
-        if (message.length > 300) {
-            message = message.substring(0, 300) + '... (Detailed error available in logs)';
-        }
+        console.error('API Error:', payload);
 
         const error = new Error(message);
         error.status = response.status;
-        error.fieldErrors = payload.fieldErrors || null;
         throw error;
     }
 
@@ -48,10 +43,21 @@ const parseResponse = async (response) => {
 };
 
 const fetchWithAuth = async (url, options = {}) => {
-    const response = await fetch(`${API_BASE_URL}${url}`, {
-        ...options,
-        headers: getAuthHeaders(options.headers, options.body),
-    });
+    let response;
+
+    try {
+        response = await fetch(`${API_BASE_URL}${url}`, {
+            ...options,
+            headers: getAuthHeaders(options.headers, options.body),
+        });
+    } catch (error) {
+        if (error instanceof TypeError) {
+            throw new Error(
+                `Unable to reach the backend at ${API_BASE_URL}. Make sure the Spring Boot server is running and the API URL is correct.`
+            );
+        }
+        throw error;
+    }
 
     if (response.status === 401) {
         localStorage.removeItem('accessToken');
@@ -61,129 +67,113 @@ const fetchWithAuth = async (url, options = {}) => {
 };
 
 export const api = {
-    login: (credentials) => fetchWithAuth('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify(credentials),
-    }),
+    // AUTH
+    login: (data) => fetchWithAuth('/auth/login', { method: 'POST', body: JSON.stringify(data) }),
+    register: (data) => fetchWithAuth('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
 
-    register: (userData) => fetchWithAuth('/auth/register', {
-        method: 'POST',
-        body: JSON.stringify(userData),
-    }),
-
+    // USERS
     getCurrentUser: () => fetchWithAuth('/users/me'),
-    updateCurrentUser: (userData) => fetchWithAuth('/users/me', {
-        method: 'PUT',
-        body: JSON.stringify(userData),
-    }),
-
-    getAllUsers: (filters = {}) => {
-        const queryParams = new URLSearchParams();
-        if (filters.search) queryParams.append('search', filters.search);
-        if (filters.role) queryParams.append('role', filters.role);
-        if (filters.status) queryParams.append('status', filters.status);
-        return fetchWithAuth(`/users?${queryParams.toString()}`);
+    getAllUsers: (params = {}) => {
+        const query = new URLSearchParams(
+            Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '')
+        ).toString();
+        return fetchWithAuth(`/users${query ? `?${query}` : ''}`);
     },
-
+    updateUserStatus: (id, status) => fetchWithAuth(`/users/${id}/status?status=${status}`, {
+        method: 'PUT',
+    }),
     updateUserRole: (id, role) => fetchWithAuth(`/users/${id}/role`, {
         method: 'PUT',
         body: JSON.stringify({ role }),
     }),
-
-    updateUserStatus: (id, status) => fetchWithAuth(`/users/${id}/status?status=${status}`, {
+    updateUserInfo: (id, data) => fetchWithAuth(`/users/${id}/details`, {
         method: 'PUT',
+        body: JSON.stringify(data),
     }),
-
-    updateUserInfo: (id, userData) => fetchWithAuth(`/users/${id}/details`, {
-        method: 'PUT',
-        body: JSON.stringify(userData),
-    }),
-
     deleteUser: (id) => fetchWithAuth(`/users/${id}`, {
         method: 'DELETE',
     }),
 
-    getResources: (filters = {}) => {
-        const queryParams = new URLSearchParams();
-        if (filters.type) queryParams.append('type', filters.type);
-        if (filters.status) queryParams.append('status', filters.status);
-        if (filters.location) queryParams.append('location', filters.location);
-        if (filters.minCapacity) queryParams.append('minCapacity', filters.minCapacity);
-        if (filters.search) queryParams.append('search', filters.search);
-        const suffix = queryParams.toString();
-        return fetchWithAuth(`/resources${suffix ? `?${suffix}` : ''}`);
+    // RESOURCES
+    getResources: (params = {}) => {
+        const query = new URLSearchParams(
+            Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '')
+        ).toString();
+        return fetchWithAuth(`/resources${query ? `?${query}` : ''}`);
     },
-
     getResourceById: (id) => fetchWithAuth(`/resources/${id}`),
-    createResource: (resourceData) => fetchWithAuth('/resources', {
+    createResource: (data) => fetchWithAuth('/resources', {
         method: 'POST',
-        body: JSON.stringify(resourceData),
+        body: JSON.stringify(data),
     }),
-    updateResource: (id, resourceData) => fetchWithAuth(`/resources/${id}`, {
+    updateResource: (id, data) => fetchWithAuth(`/resources/${id}`, {
         method: 'PUT',
-        body: JSON.stringify(resourceData),
-    }),
-    updateResourceStatus: (id, status) => fetchWithAuth(`/resources/${id}/status`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status }),
+        body: JSON.stringify(data),
     }),
     deleteResource: (id) => fetchWithAuth(`/resources/${id}`, {
         method: 'DELETE',
     }),
-    uploadResourceImage: (id, file) => {
+    uploadResourceImage: async (id, file) => {
         const formData = new FormData();
         formData.append('file', file);
+
         return fetchWithAuth(`/resources/${id}/image`, {
             method: 'POST',
             body: formData,
         });
     },
-
-    createBooking: (bookingData) => fetchWithAuth('/bookings', {
-        method: 'POST',
-        body: JSON.stringify(bookingData),
-    }),
-    getUserBookings: () => fetchWithAuth('/bookings/my'),
-    getAllBookings: () => fetchWithAuth('/bookings'),
-    getBookingById: (id) => fetchWithAuth(`/bookings/${id}`),
-    approveBooking: (bookingId) => fetchWithAuth(`/bookings/${bookingId}/approve`, {
-        method: 'PATCH',
-    }),
-    rejectBooking: (bookingId, reason) => fetchWithAuth(`/bookings/${bookingId}/reject`, {
-        method: 'PATCH',
-        body: JSON.stringify({ reason }),
-    }),
-    cancelBooking: (bookingId) => fetchWithAuth(`/bookings/${bookingId}/cancel`, {
-        method: 'PATCH',
-    }),
-
     getSlots: (date, resourceId) => fetchWithAuth(`/slots?date=${date}&resourceId=${resourceId}`),
-    bookSlot: (bookingData) => fetchWithAuth('/slots/book', {
-        method: 'POST',
-        body: JSON.stringify(bookingData),
-    }),
 
-    getTickets: (adminMode = false) => fetchWithAuth(`/tickets${adminMode ? '?adminMode=true' : ''}`),
-    getAdminDashboardSummary: () => fetchWithAuth('/admin/dashboard/summary'),
-    getBookingAnalytics: () => fetchWithAuth('/bookings/analytics/summary'),
-    getTicketAnalytics: () => fetchWithAuth('/tickets/analytics/summary'),
+    // BOOKINGS
+getMyBookings: () => fetchWithAuth('/bookings/my'),
+getUserBookings: () => fetchWithAuth('/bookings/my'),
+getAllBookings: () => fetchWithAuth('/bookings'),
+createBooking: (data) => fetchWithAuth('/bookings', {
+    method: 'POST',
+    body: JSON.stringify(data),
+}),
+approveBooking: (id) => fetchWithAuth(`/bookings/${id}/approve`, {
+    method: 'PATCH',
+}),
+rejectBooking: (id, reason) => fetchWithAuth(`/bookings/${id}/reject`, {
+    method: 'PATCH',
+    body: JSON.stringify({ reason }),
+}),
+cancelBooking: (id) => fetchWithAuth(`/bookings/${id}/cancel`, {
+    method: 'PATCH',
+}),
+requestBookingCancellation: (id) => fetchWithAuth(`/bookings/${id}/request-cancellation`, {
+    method: 'POST',
+}),
+getBookingById: (id) => fetchWithAuth(`/bookings/${id}`),
+updateBooking: (id, data) => fetchWithAuth(`/bookings/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+}),
+
+    // TICKETS
+    getTickets: (admin = false) => fetchWithAuth(`/tickets${admin ? '?adminMode=true' : ''}`),
+    createTicket: (data) => fetchWithAuth('/tickets', { method: 'POST', body: JSON.stringify(data) }),
     getTicketById: (id) => fetchWithAuth(`/tickets/${id}`),
-    createTicket: (ticketData) => fetchWithAuth('/tickets', {
+    getTicketComments: (id) => fetchWithAuth(`/tickets/${id}/comments`),
+    addTicketComment: (id, data) => fetchWithAuth(`/tickets/${id}/comments`, {
         method: 'POST',
-        body: JSON.stringify(ticketData),
+        body: JSON.stringify(data),
     }),
-    updateTicketStatus: (id, statusData) => fetchWithAuth(`/tickets/${id}/status`, {
+    updateTicketStatus: (id, data) => fetchWithAuth(`/tickets/${id}/status`, {
         method: 'PATCH',
-        body: JSON.stringify(statusData),
+        body: JSON.stringify(data),
     }),
     assignTicket: (id, assignedToId) => fetchWithAuth(`/tickets/${id}/assign?assignedToId=${assignedToId}`, {
         method: 'PATCH',
     }),
-    addTicketComment: (id, commentData) => fetchWithAuth(`/tickets/${id}/comments`, {
-        method: 'POST',
-        body: JSON.stringify(commentData),
+    updateTicket: (id, data) => fetchWithAuth(`/tickets/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
     }),
-    getTicketComments: (id) => fetchWithAuth(`/tickets/${id}/comments`),
+    cancelTicket: (id) => fetchWithAuth(`/tickets/${id}/cancel`, {
+        method: 'PATCH',
+    }),
     uploadTicketImage: (id, file) => {
         const formData = new FormData();
         formData.append('file', file);
@@ -192,13 +182,23 @@ export const api = {
             body: formData,
         });
     },
+    getTicketAnalytics: () => fetchWithAuth('/tickets/analytics/summary'),
+    updateComment: (id, data) => fetchWithAuth(`/comments/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+    }),
+    deleteComment: (id) => fetchWithAuth(`/comments/${id}`, {
+        method: 'DELETE',
+    }),
 
+    // NOTIFICATIONS
     getUserNotifications: () => fetchWithAuth('/notifications'),
     getNotificationUnreadCount: () => fetchWithAuth('/notifications/unread-count'),
-    markNotificationAsRead: (id) => fetchWithAuth(`/notifications/${id}/read`, {
-        method: 'PUT',
-    }),
-    markAllNotificationsAsRead: () => fetchWithAuth('/notifications/read-all', {
-        method: 'PUT',
-    }),
+    markNotificationAsRead: (id) => fetchWithAuth(`/notifications/${id}/read`, { method: 'PUT' }),
+    markAllNotificationsAsRead: () => fetchWithAuth('/notifications/read-all', { method: 'PUT' }),
+
+    // DASHBOARD
+    getAdminDashboardSummary: () => fetchWithAuth('/admin/dashboard/summary'),
+    getAdminOperationsCalendar: (start, end) => fetchWithAuth(`/admin/operations/calendar?start=${start}&end=${end}`),
+    getUserDashboardSummary: () => fetchWithAuth('/user/dashboard/summary'),
 };
