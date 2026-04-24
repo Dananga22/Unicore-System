@@ -36,6 +36,7 @@ const parseResponse = async (response) => {
 
         const error = new Error(message);
         error.status = response.status;
+        error.fieldErrors = payload?.fieldErrors || null;
         throw error;
     }
 
@@ -67,12 +68,18 @@ const fetchWithAuth = async (url, options = {}) => {
 };
 
 export const api = {
+    API_ORIGIN,
+
     // AUTH
     login: (data) => fetchWithAuth('/auth/login', { method: 'POST', body: JSON.stringify(data) }),
     register: (data) => fetchWithAuth('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
 
     // USERS
     getCurrentUser: () => fetchWithAuth('/users/me'),
+    updateCurrentUser: (data) => fetchWithAuth('/users/me', {
+        method: 'PUT',
+        body: JSON.stringify(data),
+    }),
     getAllUsers: (params = {}) => {
         const query = new URLSearchParams(
             Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '')
@@ -113,7 +120,7 @@ export const api = {
     deleteResource: (id) => fetchWithAuth(`/resources/${id}`, {
         method: 'DELETE',
     }),
-    uploadResourceImage: async (id, file) => {
+    uploadResourceImage: (id, file) => {
         const formData = new FormData();
         formData.append('file', file);
 
@@ -125,31 +132,31 @@ export const api = {
     getSlots: (date, resourceId) => fetchWithAuth(`/slots?date=${date}&resourceId=${resourceId}`),
 
     // BOOKINGS
-getMyBookings: () => fetchWithAuth('/bookings/my'),
-getUserBookings: () => fetchWithAuth('/bookings/my'),
-getAllBookings: () => fetchWithAuth('/bookings'),
-createBooking: (data) => fetchWithAuth('/bookings', {
-    method: 'POST',
-    body: JSON.stringify(data),
-}),
-approveBooking: (id) => fetchWithAuth(`/bookings/${id}/approve`, {
-    method: 'PATCH',
-}),
-rejectBooking: (id, reason) => fetchWithAuth(`/bookings/${id}/reject`, {
-    method: 'PATCH',
-    body: JSON.stringify({ reason }),
-}),
-cancelBooking: (id) => fetchWithAuth(`/bookings/${id}/cancel`, {
-    method: 'PATCH',
-}),
-requestBookingCancellation: (id) => fetchWithAuth(`/bookings/${id}/request-cancellation`, {
-    method: 'POST',
-}),
-getBookingById: (id) => fetchWithAuth(`/bookings/${id}`),
-updateBooking: (id, data) => fetchWithAuth(`/bookings/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
-}),
+    getMyBookings: () => fetchWithAuth('/bookings/my'),
+    getUserBookings: () => fetchWithAuth('/bookings/my'),
+    getAllBookings: () => fetchWithAuth('/bookings'),
+    createBooking: (data) => fetchWithAuth('/bookings', {
+        method: 'POST',
+        body: JSON.stringify(data),
+    }),
+    approveBooking: (id) => fetchWithAuth(`/bookings/${id}/approve`, {
+        method: 'PATCH',
+    }),
+    rejectBooking: (id, reason) => fetchWithAuth(`/bookings/${id}/reject`, {
+        method: 'PATCH',
+        body: JSON.stringify({ reason }),
+    }),
+    cancelBooking: (id) => fetchWithAuth(`/bookings/${id}/cancel`, {
+        method: 'PATCH',
+    }),
+    requestBookingCancellation: (id) => fetchWithAuth(`/bookings/${id}/request-cancellation`, {
+        method: 'POST',
+    }),
+    getBookingById: (id) => fetchWithAuth(`/bookings/${id}`),
+    updateBooking: (id, data) => fetchWithAuth(`/bookings/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+    }),
 
     // TICKETS
     getTickets: (admin = false) => fetchWithAuth(`/tickets${admin ? '?adminMode=true' : ''}`),
