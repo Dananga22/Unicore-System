@@ -31,12 +31,14 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
 
     private OAuth2User processOAuth2User(OAuth2UserRequest userRequest, OAuth2User oAuth2User) {
         String email = oAuth2User.getAttribute("email");
+
         if (email == null || email.isEmpty()) {
             throw new RuntimeException("Email not found from OAuth2 provider");
         }
 
         Optional<User> userOptional = userRepository.findByEmail(email);
         User user;
+
         if (userOptional.isPresent()) {
             user = userOptional.get();
             // Update profile info for existing user
@@ -50,6 +52,7 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
                 user.setProviderId(oAuth2User.getAttribute("sub"));
             }
             user = userRepository.save(user);
+
         } else {
             // Register new user
             user = User.builder()
