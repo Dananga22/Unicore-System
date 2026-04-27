@@ -34,4 +34,5 @@ public class TicketResponseDTO {
     private List<TicketHistoryResponseDTO> history;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    private java.util.Map<String, String> links;
 }

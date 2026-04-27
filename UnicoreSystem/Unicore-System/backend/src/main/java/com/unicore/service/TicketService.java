@@ -32,6 +32,10 @@ import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.stream.Collectors;
 
+/**
+ * Service class for Ticket lifecycle management.
+ * Handles business logic for ticket creation, status updates, assignments, and notifications.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -501,6 +505,12 @@ public class TicketService {
         ticketHistoryRepository.save(history);
     }
 
+    /**
+     * Maps a Ticket entity to a TicketResponseDTO and generates HATEOAS links.
+     * 
+     * @param ticket The ticket entity
+     * @return The populated DTO with navigation links
+     */
     public TicketResponseDTO mapToDTO(Ticket ticket) {
         List<String> images = ticket.getImages() != null
                 ? ticket.getImages().stream().map(TicketImage::getImageUrl).collect(Collectors.toList())
@@ -520,6 +530,15 @@ public class TicketService {
                     .sorted((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()))
                     .collect(Collectors.toList())
                 : List.of();
+
+        // HATEOAS Link Generation
+        java.util.Map<String, String> links = new java.util.HashMap<>();
+        links.put("self", "/api/tickets/" + ticket.getId());
+        links.put("comments", "/api/tickets/" + ticket.getId() + "/comments");
+        links.put("attachments", "/api/tickets/" + ticket.getId() + "/attachments");
+        if (ticket.getResource() != null) {
+            links.put("resource", "/api/resources/" + ticket.getResource().getId());
+        }
 
         return TicketResponseDTO.builder()
                 .id(ticket.getId())
@@ -541,6 +560,7 @@ public class TicketService {
                 .history(history)
                 .createdAt(ticket.getCreatedAt())
                 .updatedAt(ticket.getUpdatedAt())
+                .links(links)
                 .build();
     }
 }

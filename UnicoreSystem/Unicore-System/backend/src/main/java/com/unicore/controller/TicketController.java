@@ -28,6 +28,13 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
+/**
+ * REST Controller for managing support and incident tickets.
+ * Provides endpoints for ticket lifecycle management, assignments, and discussions.
+ * 
+ * @author IT3030 Group
+ * @version 1.0
+ */
 @RestController
 @RequestMapping("/api/tickets")
 @RequiredArgsConstructor
@@ -36,6 +43,13 @@ public class TicketController {
     private final TicketService ticketService;
     private final SecurityUtils securityUtils;
 
+    /**
+     * Creates a new ticket.
+     * 
+     * @param request The ticket details (title, description, priority, category)
+     * @param authentication The current authenticated user
+     * @return The created ticket response
+     */
     @PostMapping
     public ResponseEntity<TicketResponseDTO> createTicket(
             @Valid @RequestBody TicketRequestDTO request,
@@ -97,6 +111,14 @@ public class TicketController {
         );
     }
 
+    /**
+     * Adds a comment to a specific ticket.
+     * 
+     * @param id The ID of the ticket
+     * @param request The comment content
+     * @param authentication The current authenticated user
+     * @return The created comment
+     */
     @PostMapping("/{id}/comments")
     public ResponseEntity<CommentResponseDTO> addComment(
             @PathVariable Long id,

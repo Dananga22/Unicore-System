@@ -1,0 +1,50 @@
+server:
+  port: 8080
+
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/unicore_db?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    username: ${SPRING_DATASOURCE_USERNAME:root}
+    password: ${SPRING_DATASOURCE_PASSWORD:root2003}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: 412240742184-9lbjnn224mk16jtj383ecimnp9ciqcgr.apps.googleusercontent.com
+            client-secret: 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
+            scope:
+              - email
+              - profile
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+        provider:
+          google:
+            authorization-uri: https://accounts.google.com/o/oauth2/v2/auth?prompt=select_account
+
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 15MB
+
+app:
+  jwt:
+    # 🔥 VERY IMPORTANT → MUST be long for HS512 (>= 64 bytes)
+    secret: unicore-smart-campus-jwt-secret-key-2026-paf-assignment-secure-hs512-ultra-long-key-material-for-production-safe-1234567890abcdef
+    expiration-ms: 86400000
+
+  oauth2:
+    authorized-redirect-uri: http://localhost:5173/oauth2/redirect
+
+  upload:
+    dir: ./uploads
