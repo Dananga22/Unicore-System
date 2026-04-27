@@ -1,0 +1,34 @@
+# Maven / Java
+Unicore-System/backend/target/
+Unicore-System/backend/target-cli/
+Unicore-System/backend/uploads/
+Unicore-System/apache-maven-3.9.6/
+Unicore-System/jdk17/
+
+# Node / React
+Unicore-System/frontend/node_modules/
+Unicore-System/frontend/dist/
+Unicore-System/frontend/.env.local
+Unicore-System/frontend/.env.production
+
+# IDE
+.idea/
+*.iml
+.vscode/settings.json
+*.suo
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+.DS_Store?
+
+# Logs
+*.log
+logs/
+
+# Spring Boot application secrets (use env vars in CI)
+Unicore-System/backend/src/main/resources/application-prod.properties
+
+# Docker volumes
+mysql_data/

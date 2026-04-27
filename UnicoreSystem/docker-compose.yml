@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: unicore-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: unicore_db
+      MYSQL_USER: unicore_user
+      MYSQL_PASSWORD: unicore_pass
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - unicore-network
+    command: --default-authentication-plugin=mysql_native_password
+
+  adminer:
+    image: adminer:latest
+    container_name: unicore-adminer
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    networks:
+      - unicore-network
+    depends_on:
+      - mysql
+
+volumes:
+  mysql_data:
+
+networks:
+  unicore-network:
+    driver: bridge
